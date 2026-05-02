@@ -1,6 +1,6 @@
-export type ParserType = "json" | "raw" | "regex" | string;
+export type ParserType = "raw" | "json" | "regex" | "loki";
 
-export type SecurityMode = "none" | "header" | "query" | string;
+export type SecurityMode = "none" | "header" | "query";
 
 export type PipelineParserConfig = {
   type: ParserType;
@@ -8,8 +8,18 @@ export type PipelineParserConfig = {
   regex?: string;
 };
 
+export type PipelineMappingConfig = {
+  timestamp?: string;
+  level?: string;
+  message?: string;
+  source?: string;
+  host?: string;
+  service?: string;
+  env?: string;
+};
+
 export type PipelineDefaultsConfig = {
-  source: string;
+  source?: string;
   host?: string;
   env?: string;
   service?: string;
@@ -26,9 +36,10 @@ export type PipelineSecurityConfig = {
 
 export type PipelineRuntimeConfig = {
   parser: PipelineParserConfig;
-  defaults: PipelineDefaultsConfig;
+  mapping?: PipelineMappingConfig;
+  defaults?: PipelineDefaultsConfig;
   publish: PipelinePublishConfig;
-  security: PipelineSecurityConfig;
+  security?: PipelineSecurityConfig;
   input?: string;
 };
 
@@ -50,6 +61,8 @@ export type ValidationIssueCode =
   | "FIELD_MUST_BE_STRING"
   | "FIELD_MUST_BE_BOOLEAN"
   | "UNSUPPORTED_NESTED_KEY"
+  | "UNSUPPORTED_PARSER_TYPE"
+  | "UNSUPPORTED_SECURITY_MODE"
   | "REGEX_PATTERN_REQUIRED"
   | "REGEX_PATTERN_INVALID"
   | "SOURCE_MISMATCH";

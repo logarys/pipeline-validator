@@ -2,13 +2,14 @@
 
 Validation helpers for Logarys pipeline runtime JSON configuration.
 
-This package centralizes the checks previously implemented in the UI:
+This package centralizes pipeline checks shared by Logarys applications:
 
 - JSON syntax check
 - required object checks
 - required field checks
+- parser type validation aligned with the ingestor (`raw`, `json`, `regex`, `loki`)
 - regex syntax check
-- storage-manager DTO compatibility checks
+- ingestor pipeline field compatibility checks
 - normalization of `parser.regex` to `parser.pattern`
 
 ## Install
@@ -28,8 +29,7 @@ import {
 
 const result = parsePipelineJson(`{
   "parser": {
-    "type": "regex",
-    "pattern": "^timestamp=(?<timestamp>\\S+)"
+    "type": "loki"
   },
   "defaults": {
     "source": "locafire-docker"
@@ -56,9 +56,7 @@ A runtime config block must contain these required objects:
 ```json
 {
   "parser": {},
-  "defaults": {},
-  "publish": {},
-  "security": {}
+  "publish": {}
 }
 ```
 
@@ -66,9 +64,16 @@ Required fields:
 
 ```txt
 parser.type
-defaults.source
 publish.subject
-security.mode
+```
+
+Supported parser types:
+
+```txt
+raw
+json
+regex
+loki
 ```
 
 For regex pipelines:
@@ -78,6 +83,37 @@ parser.pattern
 ```
 
 `parser.regex` is accepted for legacy configs and normalized to `parser.pattern`.
+
+Optional objects:
+
+```txt
+mapping
+mapping.timestamp
+mapping.level
+mapping.message
+mapping.source
+mapping.host
+mapping.service
+mapping.env
+
+defaults
+defaults.source
+defaults.host
+defaults.service
+defaults.env
+
+security
+security.mode
+security.token
+```
+
+Supported security modes:
+
+```txt
+none
+header
+query
+```
 
 ## Full pipeline document validation
 
@@ -96,14 +132,23 @@ source
 enabled
 ```
 
-## Storage-manager compatibility
+## Ingestor compatibility
 
-The validator rejects fields known to be rejected by the current storage-manager DTO, for example:
+The validator follows the ingestor pipeline conventions:
+
+- `mapping` is a top-level object, singular, not `mappings`
+- `defaults` is optional and contains only `source`, `host`, `service`, `env`
+- `security` is optional and contains `mode` and optional `token`
+- `parser.type` must be one of `raw`, `json`, `regex`, `loki`
+- the legacy misspelling `lokki` is not accepted
+
+The validator rejects fields that are not part of this schema, for example:
 
 ```txt
 name
 mappings
 parser.mappings
+mapping.environment
 defaults.environment
 defaults.job
 defaults.level
@@ -141,4 +186,3 @@ type ValidationResult<T = unknown> = {
   value?: T;
 };
 ```
-

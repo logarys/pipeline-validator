@@ -9,6 +9,7 @@ import type {
 
 const RUNTIME_TOP_LEVEL_KEYS = new Set([
   "parser",
+  "mapping",
   "defaults",
   "publish",
   "security",
@@ -23,9 +24,20 @@ const DOCUMENT_TOP_LEVEL_KEYS = new Set([
 ]);
 
 const ALLOWED_PARSER_KEYS = new Set(["type", "pattern", "regex"]);
+const ALLOWED_MAPPING_KEYS = new Set([
+  "timestamp",
+  "level",
+  "message",
+  "source",
+  "host",
+  "service",
+  "env",
+]);
+const ALLOWED_PARSER_TYPES = new Set(["raw", "json", "regex", "loki"]);
 const ALLOWED_DEFAULTS_KEYS = new Set(["source", "host", "env", "service"]);
 const ALLOWED_PUBLISH_KEYS = new Set(["subject"]);
 const ALLOWED_SECURITY_KEYS = new Set(["mode", "token"]);
+const ALLOWED_SECURITY_MODES = new Set(["none", "header", "query"]);
 
 export function parsePipelineJson(
   json: string,
@@ -78,7 +90,7 @@ export function validatePipelineConfig(
     }
   }
 
-  for (const key of ["parser", "defaults", "publish", "security"] as const) {
+  for (const key of ["parser", "publish"] as const) {
     if (!(key in object)) {
       issues.push({
         severity: "error",
@@ -136,8 +148,13 @@ export function validatePipelineConfig(
     optionalString(parser, "regex", "$.parser.regex", issues);
 
     const parserType = parser.type;
+    if (typeof parserType === "string" && parserType.trim() !== "") {
+      validateParserType(parserType, issues);
+    }
+
     if (parserType === "regex") {
-      const pattern = stringOrUndefined(parser.pattern) ?? stringOrUndefined(parser.regex);
+      const pattern =
+        stringOrUndefined(parser.pattern) ?? stringOrUndefined(parser.regex);
 
       if (!pattern) {
         issues.push({
@@ -152,12 +169,41 @@ export function validatePipelineConfig(
     }
   }
 
-  if (isPlainObject(object.defaults)) {
-    validateObjectKeys(object.defaults, ALLOWED_DEFAULTS_KEYS, "$.defaults", issues);
-    requireString(object.defaults, "source", "$.defaults.source", issues);
-    optionalString(object.defaults, "host", "$.defaults.host", issues);
-    optionalString(object.defaults, "env", "$.defaults.env", issues);
-    optionalString(object.defaults, "service", "$.defaults.service", issues);
+  if ("mapping" in object) {
+    if (!isPlainObject(object.mapping)) {
+      issues.push({
+        severity: "error",
+        code: "FIELD_MUST_BE_OBJECT",
+        path: "$.mapping",
+        message: "mapping must be an object.",
+      });
+    } else {
+      validateObjectKeys(object.mapping, ALLOWED_MAPPING_KEYS, "$.mapping", issues);
+      optionalString(object.mapping, "timestamp", "$.mapping.timestamp", issues);
+      optionalString(object.mapping, "level", "$.mapping.level", issues);
+      optionalString(object.mapping, "message", "$.mapping.message", issues);
+      optionalString(object.mapping, "source", "$.mapping.source", issues);
+      optionalString(object.mapping, "host", "$.mapping.host", issues);
+      optionalString(object.mapping, "service", "$.mapping.service", issues);
+      optionalString(object.mapping, "env", "$.mapping.env", issues);
+    }
+  }
+
+  if ("defaults" in object) {
+    if (!isPlainObject(object.defaults)) {
+      issues.push({
+        severity: "error",
+        code: "FIELD_MUST_BE_OBJECT",
+        path: "$.defaults",
+        message: "defaults must be an object.",
+      });
+    } else {
+      validateObjectKeys(object.defaults, ALLOWED_DEFAULTS_KEYS, "$.defaults", issues);
+      optionalString(object.defaults, "source", "$.defaults.source", issues);
+      optionalString(object.defaults, "host", "$.defaults.host", issues);
+      optionalString(object.defaults, "env", "$.defaults.env", issues);
+      optionalString(object.defaults, "service", "$.defaults.service", issues);
+    }
   }
 
   if (isPlainObject(object.publish)) {
@@ -165,10 +211,24 @@ export function validatePipelineConfig(
     requireString(object.publish, "subject", "$.publish.subject", issues);
   }
 
-  if (isPlainObject(object.security)) {
-    validateObjectKeys(object.security, ALLOWED_SECURITY_KEYS, "$.security", issues);
-    requireString(object.security, "mode", "$.security.mode", issues);
-    optionalString(object.security, "token", "$.security.token", issues);
+  if ("security" in object) {
+    if (!isPlainObject(object.security)) {
+      issues.push({
+        severity: "error",
+        code: "FIELD_MUST_BE_OBJECT",
+        path: "$.security",
+        message: "security must be an object.",
+      });
+    } else {
+      validateObjectKeys(object.security, ALLOWED_SECURITY_KEYS, "$.security", issues);
+      requireString(object.security, "mode", "$.security.mode", issues);
+      optionalString(object.security, "token", "$.security.token", issues);
+
+      const securityMode = object.security.mode;
+      if (typeof securityMode === "string" && securityMode.trim() !== "") {
+        validateSecurityMode(securityMode, issues);
+      }
+    }
   }
 
   if (
@@ -204,18 +264,28 @@ export function normalizePipelineConfig<T extends PipelineRuntimeConfig | Pipeli
   const parser: PipelineParserConfig = {
     type: config.parser.type,
   };
-  
+
   if (pattern !== undefined) {
     parser.pattern = pattern;
   }
-  
+
   const normalized: PipelineRuntimeConfig | PipelineDocument = {
     ...config,
-    defaults: { ...config.defaults },
-    publish: { ...config.publish },
-    security: { ...config.security },
     parser,
+    publish: { ...config.publish },
   };
+
+  if (config.mapping !== undefined) {
+    normalized.mapping = { ...config.mapping };
+  }
+
+  if (config.defaults !== undefined) {
+    normalized.defaults = { ...config.defaults };
+  }
+
+  if (config.security !== undefined) {
+    normalized.security = { ...config.security };
+  }
 
   delete normalized.parser.regex;
 
@@ -281,6 +351,38 @@ function optionalString(
       code: "FIELD_MUST_BE_STRING",
       path,
       message: `${path} must be a string.`,
+    });
+  }
+}
+
+function validateParserType(
+  parserType: string,
+  issues: ValidationIssue[],
+): void {
+  if (!ALLOWED_PARSER_TYPES.has(parserType)) {
+    issues.push({
+      severity: "error",
+      code: "UNSUPPORTED_PARSER_TYPE",
+      path: "$.parser.type",
+      message: `Unsupported parser type: ${parserType}. Expected one of: ${[
+        ...ALLOWED_PARSER_TYPES,
+      ].join(", ")}.`,
+    });
+  }
+}
+
+function validateSecurityMode(
+  securityMode: string,
+  issues: ValidationIssue[],
+): void {
+  if (!ALLOWED_SECURITY_MODES.has(securityMode)) {
+    issues.push({
+      severity: "error",
+      code: "UNSUPPORTED_SECURITY_MODE",
+      path: "$.security.mode",
+      message: `Unsupported security mode: ${securityMode}. Expected one of: ${[
+        ...ALLOWED_SECURITY_MODES,
+      ].join(", ")}.`,
     });
   }
 }

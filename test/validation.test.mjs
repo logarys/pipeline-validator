@@ -12,6 +12,11 @@ const validRuntimeConfig = {
     pattern:
       "^timestamp=(?<timestamp>\\S+)\\s+level=(?<level>\\S+)\\s+msg=(?<message>.*?)$",
   },
+  mapping: {
+    timestamp: "timestamp",
+    level: "level",
+    message: "message",
+  },
   defaults: {
     source: "locafire-docker",
     host: "locafire-prod-1",
@@ -32,6 +37,105 @@ test("validates a runtime pipeline config", () => {
   assert.deepEqual(result.errors, []);
 });
 
+test("validates an ingestor minimal runtime pipeline config", () => {
+  const result = validatePipelineConfig({
+    parser: {
+      type: "raw",
+    },
+    publish: {
+      subject: "logs.raw.normalized",
+    },
+  });
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.errors, []);
+});
+
+const supportedParserConfigs = [
+  {
+    type: "raw",
+    parser: { type: "raw" },
+  },
+  {
+    type: "json",
+    parser: { type: "json" },
+  },
+  {
+    type: "regex",
+    parser: {
+      type: "regex",
+      pattern: "^(?<message>.*)$",
+    },
+  },
+  {
+    type: "loki",
+    parser: { type: "loki" },
+  },
+];
+
+test("accepts all parser types supported by the ingestor", async (t) => {
+  for (const { type, parser } of supportedParserConfigs) {
+    await t.test(type, () => {
+      const result = validatePipelineConfig({
+        parser,
+        publish: {
+          subject: `logs.${type}.normalized`,
+        },
+      });
+
+      assert.equal(result.valid, true, JSON.stringify(result.errors));
+      assert.deepEqual(result.errors, []);
+      assert.equal(result.value.parser.type, type);
+    });
+  }
+});
+
+test("accepts the canonical loki parser type", () => {
+  const result = validatePipelineConfig({
+    parser: {
+      type: "loki",
+    },
+    publish: {
+      subject: "logs.loki.normalized",
+    },
+  });
+
+  assert.equal(result.valid, true);
+  assert.equal(result.value.parser.type, "loki");
+});
+
+test("rejects the legacy lokki misspelling", () => {
+  const result = validatePipelineConfig({
+    parser: {
+      type: "lokki",
+    },
+    publish: {
+      subject: "logs.loki.normalized",
+    },
+  });
+
+  assert.equal(result.valid, false);
+  assert.ok(
+    result.errors.some((issue) => issue.code === "UNSUPPORTED_PARSER_TYPE"),
+  );
+});
+
+test("rejects unsupported parser types", () => {
+  const result = validatePipelineConfig({
+    parser: {
+      type: "xml",
+    },
+    publish: {
+      subject: "logs.xml.normalized",
+    },
+  });
+
+  assert.equal(result.valid, false);
+  assert.ok(
+    result.errors.some((issue) => issue.code === "UNSUPPORTED_PARSER_TYPE"),
+  );
+});
+
 test("rejects invalid JSON", () => {
   const result = parsePipelineJson("{");
 
@@ -45,21 +149,19 @@ test("checks required objects", () => {
   assert.equal(result.valid, false);
   assert.deepEqual(
     result.errors.map((issue) => issue.path),
-    ["$.parser", "$.defaults", "$.publish", "$.security"],
+    ["$.parser", "$.publish"],
   );
 });
 
 test("checks required fields", () => {
   const result = validatePipelineConfig({
     parser: {},
-    defaults: {},
     publish: {},
     security: {},
   });
 
   assert.equal(result.valid, false);
   assert.ok(result.errors.some((issue) => issue.path === "$.parser.type"));
-  assert.ok(result.errors.some((issue) => issue.path === "$.defaults.source"));
   assert.ok(result.errors.some((issue) => issue.path === "$.publish.subject"));
   assert.ok(result.errors.some((issue) => issue.path === "$.security.mode"));
 });
@@ -73,6 +175,10 @@ test("rejects unsupported fields", () => {
       ...validRuntimeConfig.parser,
       mappings: {},
     },
+    mapping: {
+      ...validRuntimeConfig.mapping,
+      environment: "env",
+    },
     defaults: {
       ...validRuntimeConfig.defaults,
       job: "docker",
@@ -84,8 +190,35 @@ test("rejects unsupported fields", () => {
   assert.ok(result.errors.some((issue) => issue.path === "$.name"));
   assert.ok(result.errors.some((issue) => issue.path === "$.mappings"));
   assert.ok(result.errors.some((issue) => issue.path === "$.parser.mappings"));
+  assert.ok(result.errors.some((issue) => issue.path === "$.mapping.environment"));
   assert.ok(result.errors.some((issue) => issue.path === "$.defaults.job"));
   assert.ok(result.errors.some((issue) => issue.path === "$.defaults.level"));
+});
+
+test("checks mapping values are strings", () => {
+  const result = validatePipelineConfig({
+    ...validRuntimeConfig,
+    mapping: {
+      level: 123,
+    },
+  });
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((issue) => issue.path === "$.mapping.level"));
+});
+
+test("checks security mode values", () => {
+  const result = validatePipelineConfig({
+    ...validRuntimeConfig,
+    security: {
+      mode: "cookie",
+    },
+  });
+
+  assert.equal(result.valid, false);
+  assert.ok(
+    result.errors.some((issue) => issue.code === "UNSUPPORTED_SECURITY_MODE"),
+  );
 });
 
 test("checks regex syntax", () => {
@@ -131,6 +264,29 @@ test("validates full pipeline documents", () => {
   assert.equal(result.valid, true);
 });
 
+test("validates full loki pipeline documents", () => {
+  const result = validatePipelineConfig(
+    {
+      id: "promtail",
+      source: "promtail",
+      enabled: true,
+      parser: {
+        type: "loki",
+      },
+      publish: {
+        subject: "logs.promtail.normalized",
+      },
+      security: {
+        mode: "header",
+        token: "secret",
+      },
+    },
+    { document: true, requireDocumentFields: true },
+  );
+
+  assert.equal(result.valid, true);
+});
+
 test("warns on source mismatch", () => {
   const result = validatePipelineConfig(
     {
@@ -157,4 +313,5 @@ test("normalizePipelineConfig can be used directly", () => {
 
   assert.equal(normalized.parser.pattern, "^direct$");
   assert.equal("regex" in normalized.parser, false);
+  assert.deepEqual(normalized.mapping, validRuntimeConfig.mapping);
 });
